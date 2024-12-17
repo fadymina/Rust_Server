@@ -1,28 +1,32 @@
-use crate::message::EchoMessage;
+use crate::message::{
+    ClientMessage, ServerMessage, EchoMessage, AddResponse,
+};
 use log::{error, info, warn};
 use prost::Message;
-use std::{
-    io::{self, ErrorKind, Read, Write},
-    net::{TcpListener, TcpStream},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread,
-    time::Duration,
+use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
+use std::thread;
+use std::time::Duration;
 
+// Represents a connected client
 struct Client {
     stream: TcpStream,
 }
 
 impl Client {
+    /// Creates a new client handler
     pub fn new(stream: TcpStream) -> Self {
         Client { stream }
     }
 
+    /// Handles incoming client messages
     pub fn handle(&mut self) -> io::Result<()> {
         let mut buffer = [0; 512];
+
         // Read data from the client
         let bytes_read = self.stream.read(&mut buffer)?;
         if bytes_read == 0 {
@@ -30,27 +34,60 @@ impl Client {
             return Ok(());
         }
 
-        if let Ok(message) = EchoMessage::decode(&buffer[..bytes_read]) {
-            info!("Received: {}", message.content);
-            // Echo back the message
-            let payload = message.encode_to_vec();
-            self.stream.write_all(&payload)?;
-            self.stream.flush()?;
+        // Decode the ClientMessage
+        if let Ok(client_message) = ClientMessage::decode(&buffer[..bytes_read]) {
+            match client_message.message {
+                Some(crate::message::client_message::Message::EchoMessage(echo)) => {
+                    info!("Received EchoMessage: {}", echo.content);
+
+                    // Prepare EchoResponse
+                    let response = ServerMessage {
+                        message: Some(crate::message::server_message::Message::EchoMessage(
+                            EchoMessage { content: echo.content },
+                        )),
+                    };
+
+                    // Send response to client
+                    let mut payload = Vec::new();
+                    response.encode(&mut payload).unwrap();
+                    self.stream.write_all(&payload)?;
+                }
+                Some(crate::message::client_message::Message::AddRequest(add_request)) => {
+                    info!("Received AddRequest: {} + {}", add_request.a, add_request.b);
+
+                    // Compute the sum and prepare AddResponse
+                    let result = add_request.a + add_request.b;
+                    let response = ServerMessage {
+                        message: Some(crate::message::server_message::Message::AddResponse(
+                            AddResponse { result },
+                        )),
+                    };
+
+                    // Send response to client
+                    let mut payload = Vec::new();
+                    response.encode(&mut payload).unwrap();
+                    self.stream.write_all(&payload)?;
+                }
+                _ => {
+                    error!("Received unsupported or unknown message type.");
+                }
+            }
         } else {
-            error!("Failed to decode message");
+            error!("Failed to decode incoming ClientMessage.");
         }
 
         Ok(())
     }
 }
 
+// Server struct that listens for and handles clients
 pub struct Server {
     listener: TcpListener,
     is_running: Arc<AtomicBool>,
 }
 
 impl Server {
-    /// Creates a new server instance
+    /// Creates a new server
     pub fn new(addr: &str) -> io::Result<Self> {
         let listener = TcpListener::bind(addr)?;
         let is_running = Arc::new(AtomicBool::new(false));
@@ -60,9 +97,9 @@ impl Server {
         })
     }
 
-    /// Runs the server, listening for incoming connections and handling them
+    /// Runs the server to accept and handle clients
     pub fn run(&self) -> io::Result<()> {
-        self.is_running.store(true, Ordering::SeqCst); // Set the server as running
+        self.is_running.store(true, Ordering::SeqCst);
         info!("Server is running on {}", self.listener.local_addr()?);
 
         // Set the listener to non-blocking mode
@@ -85,8 +122,8 @@ impl Server {
                         info!("Client {} disconnected.", addr);
                     });
                 }
-                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                    // No incoming connections, sleep briefly to reduce CPU usage
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    // No incoming connection; sleep briefly to reduce CPU usage
                     thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => {
@@ -99,7 +136,7 @@ impl Server {
         Ok(())
     }
 
-    /// Stops the server by setting the `is_running` flag to `false`
+    /// Stops the server
     pub fn stop(&self) {
         if self.is_running.load(Ordering::SeqCst) {
             self.is_running.store(false, Ordering::SeqCst);
