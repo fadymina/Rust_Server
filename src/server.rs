@@ -73,14 +73,17 @@ impl Server {
                 Ok((stream, addr)) => {
                     info!("New client connected: {}", addr);
 
-                    // Handle the client request
-                    let mut client = Client::new(stream);
-                    while self.is_running.load(Ordering::SeqCst) {
-                        if let Err(e) = client.handle() {
-                            error!("Error handling client: {}", e);
-                            break;
+                    // Spawn a new thread to handle the client
+                    thread::spawn(move || {
+                        let mut client = Client::new(stream);
+                        loop {
+                            if let Err(e) = client.handle() {
+                                error!("Error handling client {}: {}", addr, e);
+                                break; // Exit the loop on client disconnect or error
+                            }
                         }
-                    }
+                        info!("Client {} disconnected.", addr);
+                    });
                 }
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                     // No incoming connections, sleep briefly to reduce CPU usage
