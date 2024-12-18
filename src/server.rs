@@ -14,65 +14,78 @@ use std::time::Duration;
 
 // Represents a connected client
 struct Client {
-    stream: TcpStream,
+    stream: TcpStream, // TCP stream for communication with the client
 }
 
 impl Client {
     /// Creates a new client handler
+    /// 
+    /// # Arguments
+    /// * `stream` - The TCP stream representing the connection to the client.
     pub fn new(stream: TcpStream) -> Self {
-        Client { stream }
+        Client { stream } // Initialize a client with the provided stream
     }
 
     /// Handles incoming client messages
+    /// 
+    /// This function processes messages from the client and sends appropriate responses.
     pub fn handle(&mut self) -> io::Result<()> {
-        let mut buffer = [0; 512];
+        let mut buffer = [0; 512]; // Buffer to store incoming data from the client
 
-        // Read data from the client
+        // Attempt to read data from the client's stream
         let bytes_read = self.stream.read(&mut buffer)?;
         if bytes_read == 0 {
+            // If no data is read, it indicates the client has disconnected
             info!("Client disconnected.");
             return Ok(());
         }
 
-        // Decode the ClientMessage
+        // Decode the incoming data into a ClientMessage
         if let Ok(client_message) = ClientMessage::decode(&buffer[..bytes_read]) {
+            // Match the message type and handle accordingly
             match client_message.message {
+                // Handle EchoMessage type
                 Some(crate::message::client_message::Message::EchoMessage(echo)) => {
-                    info!("Received EchoMessage: {}", echo.content);
+                    info!("Received EchoMessage: {}", echo.content); // Log the received EchoMessage
 
-                    // Prepare EchoResponse
+                    // Create a response message echoing back the received content
                     let response = ServerMessage {
                         message: Some(crate::message::server_message::Message::EchoMessage(
                             EchoMessage { content: echo.content },
                         )),
                     };
 
-                    // Send response to client
+                    // Encode the response into bytes and send it back to the client
                     let mut payload = Vec::new();
                     response.encode(&mut payload).unwrap();
-                    self.stream.write_all(&payload)?;
+                    self.stream.write_all(&payload)?; // Write the response to the client's stream
                 }
+                // Handle AddRequest type
                 Some(crate::message::client_message::Message::AddRequest(add_request)) => {
-                    info!("Received AddRequest: {} + {}", add_request.a, add_request.b);
+                    info!("Received AddRequest: {} + {}", add_request.a, add_request.b); // Log the AddRequest details
 
-                    // Compute the sum and prepare AddResponse
+                    // Compute the sum of the two numbers provided in the request
                     let result = add_request.a + add_request.b;
+
+                    // Create a response message with the computed result
                     let response = ServerMessage {
                         message: Some(crate::message::server_message::Message::AddResponse(
                             AddResponse { result },
                         )),
                     };
 
-                    // Send response to client
+                    // Encode the response into bytes and send it back to the client
                     let mut payload = Vec::new();
                     response.encode(&mut payload).unwrap();
-                    self.stream.write_all(&payload)?;
+                    self.stream.write_all(&payload)?; // Write the response to the client's stream
                 }
+                // Handle unsupported or unknown message types
                 _ => {
-                    error!("Received unsupported or unknown message type.");
+                    error!("Received unsupported or unknown message type."); // Log an error for unsupported messages
                 }
             }
         } else {
+            // Log an error if the incoming data cannot be decoded into a ClientMessage
             error!("Failed to decode incoming ClientMessage.");
         }
 
@@ -82,67 +95,82 @@ impl Client {
 
 // Server struct that listens for and handles clients
 pub struct Server {
-    listener: TcpListener,
-    is_running: Arc<AtomicBool>,
+    listener: TcpListener, // TCP listener to accept incoming client connections
+    is_running: Arc<AtomicBool>, // Atomic flag to indicate whether the server is running
 }
 
 impl Server {
     /// Creates a new server
+    /// 
+    /// # Arguments
+    /// * `addr` - The address and port to bind the server to (e.g., "127.0.0.1:8080").
+    /// 
+    /// # Returns
+    /// A new `Server` instance bound to the specified address.
     pub fn new(addr: &str) -> io::Result<Self> {
-        let listener = TcpListener::bind(addr)?;
-        let is_running = Arc::new(AtomicBool::new(false));
+        let listener = TcpListener::bind(addr)?; // Attempt to bind the listener to the specified address
+        let is_running = Arc::new(AtomicBool::new(false)); // Initialize the running flag as false
         Ok(Server {
             listener,
             is_running,
         })
     }
 
-    /// Runs the server to accept and handle clients
+    /// Runs the server to accept and handle client connections
+    /// 
+    /// The server listens for incoming connections and spawns threads to handle each client.
     pub fn run(&self) -> io::Result<()> {
-        self.is_running.store(true, Ordering::SeqCst);
-        info!("Server is running on {}", self.listener.local_addr()?);
+        self.is_running.store(true, Ordering::SeqCst); // Set the running flag to true
+        info!("Server is running on {}", self.listener.local_addr()?); // Log the server's address and status
 
-        // Set the listener to non-blocking mode
+        // Set the listener to non-blocking mode to avoid blocking the main thread
         self.listener.set_nonblocking(true)?;
 
+        // Main server loop to accept and handle clients
         while self.is_running.load(Ordering::SeqCst) {
             match self.listener.accept() {
+                // Handle a new incoming connection
                 Ok((stream, addr)) => {
-                    info!("New client connected: {}", addr);
+                    info!("New client connected: {}", addr); // Log the address of the connected client
 
-                    // Spawn a new thread to handle the client
+                    // Spawn a new thread to handle the connected client
                     thread::spawn(move || {
-                        let mut client = Client::new(stream);
+                        let mut client = Client::new(stream); // Create a client handler for the connection
                         loop {
+                            // Continuously handle messages from the client
                             if let Err(e) = client.handle() {
-                                error!("Error handling client {}: {}", addr, e);
-                                break; // Exit the loop on client disconnect or error
+                                error!("Error handling client {}: {}", addr, e); // Log any errors encountered
+                                break; // Exit the loop if an error occurs or the client disconnects
                             }
                         }
-                        info!("Client {} disconnected.", addr);
+                        info!("Client {} disconnected.", addr); // Log when the client disconnects
                     });
                 }
+                // Handle cases where no incoming connection is available
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    // No incoming connection; sleep briefly to reduce CPU usage
+                    // Sleep briefly to reduce CPU usage during idle periods
                     thread::sleep(Duration::from_millis(100));
                 }
+                // Log other errors that occur while accepting connections
                 Err(e) => {
                     error!("Error accepting connection: {}", e);
                 }
             }
         }
 
-        info!("Server stopped.");
+        info!("Server stopped."); // Log when the server stops
         Ok(())
     }
 
     /// Stops the server
+    /// 
+    /// This method signals the server to stop accepting new connections and terminates the main loop.
     pub fn stop(&self) {
         if self.is_running.load(Ordering::SeqCst) {
-            self.is_running.store(false, Ordering::SeqCst);
-            info!("Shutdown signal sent.");
+            self.is_running.store(false, Ordering::SeqCst); // Set the running flag to false
+            info!("Shutdown signal sent."); // Log that a shutdown signal was sent
         } else {
-            warn!("Server was already stopped or not running.");
+            warn!("Server was already stopped or not running."); // Log if the server was already stopped
         }
     }
 }
