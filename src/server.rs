@@ -30,8 +30,9 @@ impl Client {
     /// 
     /// This function processes messages from the client and sends appropriate responses.
     pub fn handle(&mut self) -> io::Result<()> {
-        let mut buffer = [0; 512]; // Buffer to store incoming data from the client
-
+        const MAX_MESSAGE_SIZE: usize = 512; // Define a maximum allowed message size
+        let mut buffer = [0; MAX_MESSAGE_SIZE]; // Buffer to store incoming data from the client
+    
         // Attempt to read data from the client's stream
         let bytes_read = self.stream.read(&mut buffer)?;
         if bytes_read == 0 {
@@ -39,22 +40,34 @@ impl Client {
             info!("Client disconnected.");
             return Ok(());
         }
-
+    
+        // Check if the incoming message exceeds the maximum size
+        if bytes_read > MAX_MESSAGE_SIZE {
+            warn!("Received message exceeds maximum allowed size: {} bytes", bytes_read);
+            return Ok(()); // Ignore oversized messages
+        }
+    
         // Decode the incoming data into a ClientMessage
         if let Ok(client_message) = ClientMessage::decode(&buffer[..bytes_read]) {
             // Match the message type and handle accordingly
             match client_message.message {
                 // Handle EchoMessage type
                 Some(crate::message::client_message::Message::EchoMessage(echo)) => {
+                    // Verify the content of the EchoMessage
+                    if echo.content.trim().is_empty() {
+                        warn!("Received empty EchoMessage content.");
+                        return Ok(()); // Ignore empty messages
+                    }
+    
                     info!("Received EchoMessage: {}", echo.content); // Log the received EchoMessage
-
+    
                     // Create a response message echoing back the received content
                     let response = ServerMessage {
                         message: Some(crate::message::server_message::Message::EchoMessage(
                             EchoMessage { content: echo.content },
                         )),
                     };
-
+    
                     // Encode the response into bytes and send it back to the client
                     let mut payload = Vec::new();
                     response.encode(&mut payload).unwrap();
@@ -62,18 +75,24 @@ impl Client {
                 }
                 // Handle AddRequest type
                 Some(crate::message::client_message::Message::AddRequest(add_request)) => {
+                    // Verify the numbers in the AddRequest
+                    if add_request.a < 0 || add_request.b < 0 {
+                        warn!("Received AddRequest with negative numbers: {} + {}", add_request.a, add_request.b);
+                        return Ok(()); // Ignore invalid requests
+                    }
+    
                     info!("Received AddRequest: {} + {}", add_request.a, add_request.b); // Log the AddRequest details
-
+    
                     // Compute the sum of the two numbers provided in the request
                     let result = add_request.a + add_request.b;
-
+    
                     // Create a response message with the computed result
                     let response = ServerMessage {
                         message: Some(crate::message::server_message::Message::AddResponse(
                             AddResponse { result },
                         )),
                     };
-
+    
                     // Encode the response into bytes and send it back to the client
                     let mut payload = Vec::new();
                     response.encode(&mut payload).unwrap();
@@ -88,9 +107,10 @@ impl Client {
             // Log an error if the incoming data cannot be decoded into a ClientMessage
             error!("Failed to decode incoming ClientMessage.");
         }
-
+    
         Ok(())
     }
+    
 }
 
 // Server struct that listens for and handles clients
