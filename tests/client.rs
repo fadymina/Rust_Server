@@ -67,12 +67,26 @@ impl Client {
             // Encode the message to a buffer
             let mut buffer = Vec::new();
             message.encode(&mut buffer);
-
-            // Send the buffer to the server
+    
+            // Get the size of the buffer
+            let payload_size = buffer.len();
+            if payload_size > u32::MAX as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Payload size exceeds maximum limit",
+                ));
+            }
+    
+            // Convert the size to a 4-byte big-endian array
+            let size_header = (payload_size as u32).to_be_bytes();
+    
+            // Prepend the size header to the payload
+            stream.write_all(&size_header)?;
             stream.write_all(&buffer)?;
+    
             stream.flush()?;
-
             println!("Sent message: {:?}", message);
+    
             Ok(())
         } else {
             Err(io::Error::new(
@@ -81,6 +95,7 @@ impl Client {
             ))
         }
     }
+    
 
     pub fn receive(&mut self) -> io::Result<ServerMessage> {
         if let Some(ref mut stream) = self.stream {

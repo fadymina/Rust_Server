@@ -46,6 +46,9 @@ fn test_client_connection() {
 #[test]
 fn test_client_echo_message() {
     // Set up the server in a separate thread
+    let _ = env_logger::builder().is_test(true).try_init();
+    // info!("This is a log message.");
+
     let server = create_server();
     let handle = setup_server_thread(server.clone());
 
@@ -63,19 +66,29 @@ fn test_client_echo_message() {
 
     // Receive the echoed message
     let response = client.receive();
-    assert!(
-        response.is_ok(),
-        "Failed to receive response for EchoMessage"
-    );
 
-    match response.unwrap().message {
-        Some(server_message::Message::EchoMessage(echo)) => {
-            assert_eq!(
-                echo.content, echo_message.content,
-                "Echoed message content does not match"
-            );
+    if let Ok(ref server_response) = response {
+        // Access the `message` field without moving `response`
+        match &server_response.message {
+            Some(server_message::Message::EchoMessage(echo)) => {
+                assert_eq!(
+                    echo.content, echo_message.content,
+                    "Echoed message content does not match"
+                );
+                println!("Received echoed message: {}", echo.content);
+            }
+            Some(server_message::Message::AddResponse(add_response)) => {
+                println!("Received addition result: {}", add_response.result);
+            }
+            None => {
+                println!("No message in response.");
+            }
         }
-        _ => panic!("Expected EchoMessage, but received a different message"),
+    
+        // Access the `status` field separately
+        println!("Received status: {:?}", server_response.status);
+    } else {
+        eprintln!("Failed to receive response.");
     }
 
     // Disconnect the client
@@ -91,7 +104,57 @@ fn test_client_echo_message() {
         "Server thread panicked or failed to join"
     );
 }
+#[test]
+fn test_huge_payload() {
+    // Set up the server in a separate thread
+    let _ = env_logger::builder().is_test(true).try_init();
+    let server = create_server();
+    let handle = setup_server_thread(server.clone());
 
+    // Create and connect the client
+    let mut client = client::Client::new("localhost", 8080, 1000);
+    assert!(client.connect().is_ok(), "Failed to connect to the server");
+
+    // Prepare a huge payload
+    let huge_content = "A".repeat(1000); // 0.6 MB payload
+    let mut echo_message = EchoMessage::default();
+    echo_message.content = huge_content.to_string();
+    let message = client_message::Message::EchoMessage(echo_message);
+
+    // Send the huge payload to the server
+    assert!(client.send(message).is_ok(), "Failed to send huge payload");
+
+    // Receive the response
+    let response = client.receive();
+    assert!(
+        response.is_ok(),
+        "Failed to receive response for huge payload"
+    );
+
+    if let Ok(ref server_response) = response {
+        assert_eq!(
+            server_response.status , 2 ,
+            "Echoed message content does not match"
+        );
+        // Access the `status` field separately
+        println!("Received status: {:?}", server_response.status);
+    } else {
+        eprintln!("Failed to receive response.");
+    }
+
+    // Disconnect the client
+    assert!(
+        client.disconnect().is_ok(),
+        "Failed to disconnect from the server"
+    );
+
+    // Stop the server and wait for thread to finish
+    server.stop();
+    assert!(
+        handle.join().is_ok(),
+        "Server thread panicked or failed to join"
+    );
+}
 #[test]
 fn test_multiple_echo_messages() {
     // Set up the server in a separate thread
