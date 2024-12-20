@@ -36,7 +36,7 @@ fn test_client_connection() {
     );
 
     // Stop the server and wait for thread to finish
-    server.stop();
+    let _ = server.stop();
     assert!(
         handle.join().is_ok(),
         "Server thread panicked or failed to join"
@@ -84,7 +84,7 @@ fn test_client_echo_message() {
                 println!("No message in response.");
             }
         }
-    
+
         // Access the `status` field separately
         println!("Received status: {:?}", server_response.status);
     } else {
@@ -98,7 +98,7 @@ fn test_client_echo_message() {
     );
 
     // Stop the server and wait for thread to finish
-    server.stop();
+    let _ = server.stop();
     assert!(
         handle.join().is_ok(),
         "Server thread panicked or failed to join"
@@ -133,7 +133,7 @@ fn test_huge_payload() {
 
     if let Ok(ref server_response) = response {
         assert_eq!(
-            server_response.status , 2 ,
+            server_response.status, 2,
             "Echoed message content does not match"
         );
         // Access the `status` field separately
@@ -149,7 +149,7 @@ fn test_huge_payload() {
     );
 
     // Stop the server and wait for thread to finish
-    server.stop();
+    let _ = server.stop();
     assert!(
         handle.join().is_ok(),
         "Server thread panicked or failed to join"
@@ -206,7 +206,7 @@ fn test_multiple_echo_messages() {
     );
 
     // Stop the server and wait for thread to finish
-    server.stop();
+    let _ = server.stop();
     assert!(
         handle.join().is_ok(),
         "Server thread panicked or failed to join"
@@ -278,7 +278,7 @@ fn test_multiple_clients() {
     }
 
     // Stop the server and wait for thread to finish
-    server.stop();
+    let _ = server.stop();
     assert!(
         handle.join().is_ok(),
         "Server thread panicked or failed to join"
@@ -329,7 +329,7 @@ fn test_client_add_request() {
     );
 
     // Stop the server and wait for thread to finish
-    server.stop();
+    let _ = server.stop();
     assert!(
         handle.join().is_ok(),
         "Server thread panicked or failed to join"
