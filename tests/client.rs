@@ -126,4 +126,7 @@ impl Client {
             ))
         }
     }
+    pub fn stream_mut(&mut self) -> Option<&mut TcpStream> {
+        self.stream.as_mut()
+    }
 }
