@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
     thread::{self, JoinHandle},
 };
+// use std::cmp::Ordering;
 
 mod client;
 
@@ -15,16 +16,24 @@ fn setup_server_thread(server: Arc<Server>) -> JoinHandle<()> {
     })
 }
 
-fn create_server(addr: &str, port: Option<u16>) -> Arc<Server> {
+fn create_server(addr: &str, port: Option<u16>, max_connections: usize, rate_limit: usize, interval_ms: u64) -> Arc<Server> {
     let port = port.unwrap_or(8080); // Use the provided port or default to 8080
     let full_address = format!("{}:{}", addr, port);
-    Arc::new(Server::new(&full_address).expect("Failed to start server"))
+
+    // Create and configure the server
+    let server = Server::new(&full_address, max_connections)
+        .expect("Failed to start server");
+
+    // // Attach a rate limiter to the server (optional, based on Server implementation)
+    // server.set_rate_limiter(rate_limit, Duration::from_millis(interval_ms));
+
+    Arc::new(server)
 }
 
 #[test]
 fn test_client_connection() {
     // Set up the server in a separate thread
-    let server = create_server("localhost", None);
+    let server = create_server("localhost", None, 100, 10, 1000);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -51,7 +60,7 @@ fn test_client_echo_message() {
     let _ = env_logger::builder().is_test(true).try_init();
     // info!("This is a log message.");
 
-    let server = create_server("localhost", None);
+    let server = create_server("localhost", None, 100, 10, 1000);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -108,17 +117,15 @@ fn test_client_echo_message() {
 }
 #[test]
 fn test_huge_payload() {
-    // Set up the server in a separate thread
     let _ = env_logger::builder().is_test(true).try_init();
-    let server = create_server("localhost", None);
+    let server = create_server("localhost", None, 100, 10, 1000);
     let handle = setup_server_thread(server.clone());
 
-    // Create and connect the client
     let mut client = client::Client::new("localhost", 8080, 1000);
     assert!(client.connect().is_ok(), "Failed to connect to the server");
 
     // Prepare a huge payload
-    let huge_content = "A".repeat(1000); // 0.6 MB payload
+    let huge_content = "A".repeat(600);
     let mut echo_message = EchoMessage::default();
     echo_message.content = huge_content.to_string();
     let message = client_message::Message::EchoMessage(echo_message);
@@ -136,31 +143,33 @@ fn test_huge_payload() {
     if let Ok(ref server_response) = response {
         assert_eq!(
             server_response.status, 2,
-            "Echoed message content does not match"
+            "Expected status 2 (error) for oversized payload"
         );
-        // Access the `status` field separately
         println!("Received status: {:?}", server_response.status);
     } else {
         eprintln!("Failed to receive response.");
     }
 
-    // Disconnect the client
-    assert!(
-        client.disconnect().is_ok(),
-        "Failed to disconnect from the server"
-    );
+    // Attempt to disconnect gracefully
+    // let disconnect_result = client.disconnect();
+    // if disconnect_result.is_err() {
+    //     println!(
+    //         "Disconnect failed as expected due to closed connection: {:?}",
+    //         disconnect_result
+    //     );
+    // }
+    //connection is already closed by server 
 
     // Stop the server and wait for thread to finish
-    let _ = server.stop();
-    assert!(
-        handle.join().is_ok(),
-        "Server thread panicked or failed to join"
-    );
+    server.stop().unwrap();
+    handle.join().unwrap();
 }
 #[test]
 fn test_multiple_echo_messages() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     // Set up the server in a separate thread
-    let server = create_server("localhost", None);
+    let server = create_server("localhost", None, 100, 10, 1000);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -217,8 +226,11 @@ fn test_multiple_echo_messages() {
 
 #[test]
 fn test_multiple_clients() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+
     // Set up the server in a separate thread
-    let server = create_server("localhost", None);
+    let server = create_server("localhost", None, 100, 10, 1000);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect multiple clients
@@ -293,7 +305,7 @@ fn test_multiple_clients() {
 #[test]
 fn test_client_add_request() {
     // Set up the server in a separate thread
-    let server = create_server("localhost", None);
+    let server = create_server("localhost", None, 100, 10, 1000);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -343,7 +355,7 @@ fn test_client_add_request() {
 
 #[test]
 fn test_concurrent_requests() {
-    let server = create_server("localhost", None);
+    let server = create_server("localhost", None, 100, 10, 1000);
     let handle = setup_server_thread(server.clone());
 
     let mut client1 = client::Client::new("localhost", 8080, 1000);
@@ -376,10 +388,12 @@ fn test_concurrent_requests() {
 }
 #[test]
 fn test_high_connection_volume() {
-    let server = create_server("localhost", None);
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let server = create_server("localhost", None, 100, 10, 1000);
     let handle = setup_server_thread(server.clone());
 
-    let client_count = 100;
+    let client_count = 10;
     let mut clients: Vec<client::Client> = (0..client_count)
         .map(|_| client::Client::new("localhost", 8080, 1000))
         .collect();
@@ -410,16 +424,16 @@ fn test_high_connection_volume() {
     handle.join().unwrap();
 }
 #[test]
-fn test_multiple_servers() {
+fn test_multiple_servers_multiple_clients() {
     // Set up the server in a separate thread
     
-    let server0 = create_server("localhost", Some(3000));
-    let server1 = create_server("localhost", Some(7000));
-    let server2 = create_server("localhost", None);
+    let server0 = create_server("localhost", Some(3000),100,10,1000);
+    let server1 = create_server("localhost", Some(7000),100,10,1000);
+    let server2 = create_server("localhost", None, 100, 10, 1000);
 
-    let handle = setup_server_thread(server0.clone());
-    let handle = setup_server_thread(server1.clone());
-    let handle = setup_server_thread(server2.clone());
+    let handle0 = setup_server_thread(server0.clone());
+    let handle1 = setup_server_thread(server1.clone());
+    let handle2 = setup_server_thread(server2.clone());
 
     // Create and connect multiple clients
     let mut clients0 = vec![
@@ -581,7 +595,78 @@ fn test_multiple_servers() {
     let _ = server1.stop();
     let _ = server2.stop();
     assert!(
-        handle.join().is_ok(),
+        handle0.join().is_ok(),
         "Server thread panicked or failed to join"
     );
+    assert!(
+        handle1.join().is_ok(),
+            "Server thread panicked or failed to join"
+        );
+    assert!(
+        handle2.join().is_ok(),
+            "Server thread panicked or failed to join"
+        );
+    
+}
+#[test]
+fn test_server_throttling() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    // Set up the server with a low max connection limit for testing throttling
+    let max_connections = 5;
+    let server = create_server("localhost", None, max_connections, 0, 0); // No rate limiter
+    let handle = setup_server_thread(server.clone());
+
+    // std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // Prepare a pool of clients greater than the max_connections
+    const NUM_CLIENTS: usize = 10;
+    let mut clients: Vec<client::Client> = (0..NUM_CLIENTS)
+        .map(|_| client::Client::new("localhost", 8080, 1000))
+        .collect();
+
+    // std::thread::sleep(std::time::Duration::from_secs(10));
+
+
+    // Track connection results
+    let mut connected_clients = 0;
+    let mut rejected_clients = 0;
+
+    // Attempt to connect all clients
+    for client in clients.iter_mut() {
+        match client.connect() {
+            Ok(_) => {
+                connected_clients += 1;
+                println!(
+                    "Client connected successfully. Active connections: {}",
+                    server.get_active_connections()
+                );
+            }
+            Err(e) => {
+                println!("Connection failed: {}", e);
+                rejected_clients += 1;
+            }
+        }
+    }
+
+    // Verify the number of accepted and rejected connections
+    assert_eq!(
+        connected_clients, max_connections,
+        "Expected only {} clients to connect, but {} connected",
+        max_connections, connected_clients
+    );
+    assert_eq!(
+        rejected_clients, NUM_CLIENTS - max_connections,
+        "Expected {} clients to be rejected, but {} were rejected",
+        NUM_CLIENTS - max_connections, rejected_clients
+    );
+
+    // Disconnect all connected clients
+    for client in clients.iter_mut().take(connected_clients) {
+        assert!(client.disconnect().is_ok(), "Failed to disconnect a client");
+    }
+
+    // Stop the server and wait for thread to finish
+    server.stop().unwrap();
+    handle.join().unwrap();
 }

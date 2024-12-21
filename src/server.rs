@@ -9,6 +9,7 @@ use std::sync::{
 };
 use std::thread;
 use std::time::Duration;
+use std::sync::atomic::AtomicUsize;
 
 /// Represents a connected client.
 ///
@@ -69,9 +70,9 @@ impl Client {
                 message: None,
                 status: 2,
             };
-            // let mut payload = Vec::new();
-            // response.encode(&mut payload).unwrap();
-            // self.stream.write_all(&payload)?;
+            let mut payload = Vec::new();
+            response.encode(&mut payload).unwrap();
+            self.stream.write_all(&payload)?;
 
             // // Read and discard the oversized payload
             // let mut oversized_buffer = vec![0u8; payload_size];
@@ -175,11 +176,10 @@ impl Client {
 /// The server accepts client connections on a specified address and
 /// spawns a new thread for each client to handle their messages.
 pub struct Server {
-    /// TCP listener to accept client connections.
     listener: TcpListener,
-
-    /// Atomic flag to indicate whether the server is running.
     is_running: Arc<AtomicBool>,
+    max_connections: usize, // Maximum allowed concurrent connections
+    active_connections: Arc<AtomicUsize>, // Current active connections
 }
 
 impl Server {
@@ -190,14 +190,17 @@ impl Server {
     ///
     /// # Returns
     /// A `Result` containing the `Server` instance on success, or an `io::Error` on failure.
-    pub fn new(addr: &str) -> io::Result<Self> {
+    pub fn new(addr: &str, max_connections: usize) -> io::Result<Self> {
         debug!("Attempting to bind server to address: {}", addr);
         let listener = TcpListener::bind(addr)?;
         let is_running = Arc::new(AtomicBool::new(false));
+        let active_connections = Arc::new(AtomicUsize::new(0));
         info!("Server bound to address: {}", addr);
         Ok(Server {
             listener,
             is_running,
+            max_connections,
+            active_connections,
         })
     }
 
@@ -208,61 +211,94 @@ impl Server {
     ///
     /// # Errors
     /// Returns an `io::Result` if there is an issue with the listener.
+    /// 
     pub fn run(&self) -> io::Result<()> {
         self.is_running.store(true, Ordering::SeqCst);
-        info!("Server is running on {}", self.listener.local_addr()?);
-
+        info!("Server started and running.");
+    
         self.listener.set_nonblocking(true)?;
-        debug!("Set listener to non-blocking mode.");
-
-        // Main server loop to accept and handle clients
+    
         while self.is_running.load(Ordering::SeqCst) {
             match self.listener.accept() {
                 Ok((stream, addr)) => {
-                    info!("New client connected: {}", addr);
-
-                    // Spawn a new thread for each client
+                    let current_connections = self.active_connections.load(Ordering::SeqCst);
+                    info!(
+                        "New connection attempt from {}. Active connections: {}",
+                        addr, current_connections
+                    );
+    
+                    // Check connection limits
+                    if self.active_connections.fetch_add(1, Ordering::SeqCst) >= self.max_connections {
+                        warn!("Connection rejected: server at max capacity.");
+                        self.active_connections.fetch_sub(1, Ordering::SeqCst);
+                        stream.shutdown(std::net::Shutdown::Both)?;
+                        continue;
+                    }
+    
+                    // Send handshake to the client
+                    let mut client_stream = stream.try_clone()?;
+                    client_stream.write_all(b"CONNECTED\n")?;
+                    info!("Sent handshake to {}", addr);
+    
+                    // Clone shared state for the thread
+                    let active_connections = Arc::clone(&self.active_connections);
+                    let is_running = Arc::clone(&self.is_running);
+    
+                    // Spawn a thread to handle the client
                     thread::spawn(move || {
                         let mut client = Client::new(stream);
+    
                         loop {
-                            debug!("Handling messages for client: {}", addr);
+                            if !is_running.load(Ordering::SeqCst) {
+                                info!("Server shutting down. Disconnecting client: {}", addr);
+                                break;
+                            }
+    
+                            // Handle client messages
                             match client.handle() {
                                 Ok(_) => debug!("Successfully handled client message."),
                                 Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                                     info!("Client {} disconnected (EOF).", addr);
-                                    break; // Gracefully exit loop
+                                    break;
                                 }
                                 Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => {
-                                    info!("Client {} disconnected (reset).", addr);
-                                    break; // Gracefully exit loop
+                                    info!("Client {} disconnected (connection reset).", addr);
+                                    break;
                                 }
                                 Err(e) => {
                                     error!("Unexpected error for client {}: {}", addr, e);
-                                    break; // Exit loop for unexpected errors
+                                    break;
                                 }
                             }
                         }
-                        info!("Client {} disconnected.", addr);
+    
+                        // Decrement active connections
+                        active_connections.fetch_sub(1, Ordering::SeqCst);
+                        info!(
+                            "Client {} disconnected. Active connections: {}",
+                            addr,
+                            active_connections.load(Ordering::SeqCst)
+                        );
                     });
                 }
-
-                // No new connections; wait briefly
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(100));
-                    debug!("No incoming connections, sleeping briefly.");
                 }
-
-                // Log unexpected errors during connection acceptance
                 Err(e) => {
                     error!("Error accepting connection: {}", e);
                 }
             }
         }
-
+    
         info!("Server stopped.");
         Ok(())
     }
-
+    
+    
+    pub fn get_active_connections(&self) -> usize {
+        self.active_connections.load(Ordering::SeqCst)
+    }
+   
     /// Stops the server gracefully.
     ///
     /// Sets the `is_running` flag to `false`, signaling the main loop to terminate.

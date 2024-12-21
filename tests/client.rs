@@ -31,25 +31,38 @@ impl Client {
     // connect the client to the server
     pub fn connect(&mut self) -> io::Result<()> {
         println!("Connecting to {}:{}", self.ip, self.port);
-
-        // Resolve the address
+    
         let address = format!("{}:{}", self.ip, self.port);
         let socket_addrs: Vec<SocketAddr> = address.to_socket_addrs()?.collect();
-
+    
         if socket_addrs.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Invalid IP or port",
             ));
         }
-
-        // Connect to the server with a timeout
-        let stream = TcpStream::connect_timeout(&socket_addrs[0], self.timeout)?;
-        self.stream = Some(stream);
-
-        println!("Connected to the server!");
-        Ok(())
+    
+        let mut stream = TcpStream::connect_timeout(&socket_addrs[0], self.timeout)?;
+    
+        // Read handshake from the server
+        let mut buffer = [0; 1024];
+        let bytes_read = stream.read(&mut buffer)?;
+        let response = String::from_utf8_lossy(&buffer[..bytes_read]);
+    
+        if response.trim() == "CONNECTED" {
+            println!("Connected to the server!");
+            self.stream = Some(stream);
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                format!("Handshake failed: {}", response.trim()),
+            ))
+        }
     }
+    
+    
+
 
     // disconnect the client
     pub fn disconnect(&mut self) -> io::Result<()> {
