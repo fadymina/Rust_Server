@@ -226,9 +226,20 @@ impl Server {
                         let mut client = Client::new(stream);
                         loop {
                             debug!("Handling messages for client: {}", addr);
-                            if let Err(e) = client.handle() {
-                                error!("Error handling client {}: {}", addr, e);
-                                break;
+                            match client.handle() {
+                                Ok(_) => debug!("Successfully handled client message."),
+                                Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                                    info!("Client {} disconnected (EOF).", addr);
+                                    break; // Gracefully exit loop
+                                }
+                                Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => {
+                                    info!("Client {} disconnected (reset).", addr);
+                                    break; // Gracefully exit loop
+                                }
+                                Err(e) => {
+                                    error!("Unexpected error for client {}: {}", addr, e);
+                                    break; // Exit loop for unexpected errors
+                                }
                             }
                         }
                         info!("Client {} disconnected.", addr);

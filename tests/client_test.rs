@@ -266,6 +266,7 @@ fn test_multiple_clients() {
                 }
                 _ => panic!("Expected EchoMessage, but received a different message"),
             }
+            println!("Echoed Message recieved successfully ");
         }
     }
 
@@ -276,6 +277,8 @@ fn test_multiple_clients() {
             "Failed to disconnect from the server"
         );
     }
+
+    println!("disconnected all clients ");
 
     // Stop the server and wait for thread to finish
     let _ = server.stop();
