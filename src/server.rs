@@ -69,17 +69,17 @@ impl Client {
                 message: None,
                 status: 2,
             };
-            let mut payload = Vec::new();
-            response.encode(&mut payload).unwrap();
-            self.stream.write_all(&payload)?;
+            // let mut payload = Vec::new();
+            // response.encode(&mut payload).unwrap();
+            // self.stream.write_all(&payload)?;
 
-            // Read and discard the oversized payload
-            let mut oversized_buffer = vec![0u8; payload_size];
-            let _ = self.stream.read_exact(&mut oversized_buffer);
-            debug!(
-                "Oversized payload (truncated to 512 bytes): {:?}",
-                &oversized_buffer[..MAX_MESSAGE_SIZE]
-            );
+            // // Read and discard the oversized payload
+            // let mut oversized_buffer = vec![0u8; payload_size];
+            // let _ = self.stream.read_exact(&mut oversized_buffer);
+            // debug!(
+            //     "Oversized payload (truncated to 512 bytes): {:?}",
+            //     &oversized_buffer[..MAX_MESSAGE_SIZE]
+            // );
 
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
