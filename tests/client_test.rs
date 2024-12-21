@@ -1,3 +1,4 @@
+use client::Client;
 use embedded_recruitment_task::{
     message::{client_message, server_message, AddRequest, EchoMessage},
     server::Server,
@@ -669,4 +670,27 @@ fn test_server_throttling() {
     // Stop the server and wait for thread to finish
     server.stop().unwrap();
     handle.join().unwrap();
+}
+#[test]
+fn test_server_shutdown() {
+    let server = create_server("localhost", None, 5, 10, 1000);
+    let handle = setup_server_thread(server.clone());
+
+    let mut client = Client::new("localhost", 8080, 1000);
+    assert!(client.connect().is_ok(), "Failed to connect client");
+
+    // Stop the server
+    server.stop().unwrap();
+    handle.join().unwrap();
+
+    // Attempt to send a message after shutdown
+    let mut echo_message = EchoMessage::default();
+    echo_message.content = "Test after shutdown".to_string();
+    let message = client_message::Message::EchoMessage(echo_message);
+
+    let result = client.send(message);
+    assert!(
+        result.is_err(),
+        "Client should not be able to send message after server shutdown"
+    );
 }

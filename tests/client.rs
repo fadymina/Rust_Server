@@ -121,9 +121,17 @@ impl Client {
                     "Server disconnected",
                 ));
             }
-
-            info!("Received {} bytes from the server", bytes_read);
-
+    
+            let response = String::from_utf8_lossy(&buffer[..bytes_read]);
+            if response.trim() == "SHUTDOWN" {
+                info!("Server is shutting down.");
+                self.disconnect()?; // Cleanly disconnect
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "Server shutting down",
+                ));
+            }
+    
             // Decode the received message
             ServerMessage::decode(&buffer[..bytes_read]).map_err(|e| {
                 io::Error::new(
@@ -139,4 +147,5 @@ impl Client {
             ))
         }
     }
+    
 }

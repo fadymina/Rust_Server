@@ -216,6 +216,8 @@ impl Server {
         self.is_running.store(true, Ordering::SeqCst);
         info!("Server started and running.");
     
+        let mut handles = Vec::new(); // Store thread handles
+    
         self.listener.set_nonblocking(true)?;
     
         while self.is_running.load(Ordering::SeqCst) {
@@ -227,7 +229,6 @@ impl Server {
                         addr, current_connections
                     );
     
-                    // Check connection limits
                     if self.active_connections.fetch_add(1, Ordering::SeqCst) >= self.max_connections {
                         warn!("Connection rejected: server at max capacity.");
                         self.active_connections.fetch_sub(1, Ordering::SeqCst);
@@ -235,26 +236,26 @@ impl Server {
                         continue;
                     }
     
-                    // Send handshake to the client
                     let mut client_stream = stream.try_clone()?;
                     client_stream.write_all(b"CONNECTED\n")?;
                     info!("Sent handshake to {}", addr);
     
-                    // Clone shared state for the thread
                     let active_connections = Arc::clone(&self.active_connections);
                     let is_running = Arc::clone(&self.is_running);
     
                     // Spawn a thread to handle the client
-                    thread::spawn(move || {
+                    let handle = thread::spawn(move || {
                         let mut client = Client::new(stream);
     
                         loop {
                             if !is_running.load(Ordering::SeqCst) {
-                                info!("Server shutting down. Disconnecting client: {}", addr);
+                                info!("Server shutting down. Sending shutdown message to client: {}", addr);
+                                let _ = client
+                                    .stream
+                                    .write_all(b"SHUTDOWN\n"); // Notify client of shutdown
                                 break;
                             }
     
-                            // Handle client messages
                             match client.handle() {
                                 Ok(_) => debug!("Successfully handled client message."),
                                 Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => {
@@ -272,7 +273,6 @@ impl Server {
                             }
                         }
     
-                        // Decrement active connections
                         active_connections.fetch_sub(1, Ordering::SeqCst);
                         info!(
                             "Client {} disconnected. Active connections: {}",
@@ -280,6 +280,8 @@ impl Server {
                             active_connections.load(Ordering::SeqCst)
                         );
                     });
+    
+                    handles.push(handle); // Store thread handle
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(100));
@@ -290,22 +292,14 @@ impl Server {
             }
         }
     
-        info!("Server stopped.");
+        info!("Server is shutting down. Waiting for client threads to finish...");
+        for handle in handles {
+            let _ = handle.join(); // Wait for all threads to complete
+        }
+        info!("Server has shut down gracefully.");
         Ok(())
     }
     
-    
-    pub fn get_active_connections(&self) -> usize {
-        self.active_connections.load(Ordering::SeqCst)
-    }
-   
-    /// Stops the server gracefully.
-    ///
-    /// Sets the `is_running` flag to `false`, signaling the main loop to terminate.
-    ///
-    /// # Returns
-    /// * `Ok(())` if the server was running and has been stopped.
-    /// * `Err(String)` if the server was already stopped.
     pub fn stop(&self) -> Result<(), String> {
         if self.is_running.load(Ordering::SeqCst) {
             self.is_running.store(false, Ordering::SeqCst);
@@ -316,4 +310,9 @@ impl Server {
             Err("Server was already stopped or not running.".to_string())
         }
     }
+    
+    pub fn get_active_connections(&self) -> usize {
+        self.active_connections.load(Ordering::SeqCst)
+    }
+   
 }
