@@ -53,3 +53,6 @@ Rate limiting and throttling protect against resource exhaustion.
 Graceful error handling improves resilience against malformed requests and oversized payloads.
 Comprehensive testing guarantees stability, scalability, and adherence to functional requirements.
 These improvements provide a scalable and maintainable solution ready for real-world use. 🚀
+
+
+IMPORTANT : To run tests you need to use the command "cargo test  -- --test-threads=1" to ensure only one test run at a time so no conflict in adress happens when multiple tests run at same time 
