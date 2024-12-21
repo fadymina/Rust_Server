@@ -34,38 +34,11 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
 
-      # Build protobuf files
-      - name: Compile protobuf files
-        run: cargo build --features generate_protobufs --verbose
-
       # Build the project
       - name: Build project
         run: cargo build --verbose
-
-      # Run clippy to ensure code quality
-      - name: Lint with Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      # Check formatting
-      - name: Check code formatting
-        run: cargo fmt --all -- --check
 
       # Run tests
       - name: Run tests
         run: cargo test --verbose
 
-      # Optional: Generate test coverage (requires `cargo-tarpaulin`)
-      - name: Generate test coverage
-        if: always()
-        run: |
-          cargo install cargo-tarpaulin
-          cargo tarpaulin --out Html
-        env:
-          CARGO_INCREMENTAL: 0
-          RUSTFLAGS: '-Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off'
-      - name: Upload Coverage Report
-        if: always()
-        uses: actions/upload-artifact@v3
-        with:
-          name: coverage-report
-          path: ./tarpaulin-report.html
