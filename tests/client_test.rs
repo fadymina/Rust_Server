@@ -338,3 +338,72 @@ fn test_client_add_request() {
         "Server thread panicked or failed to join"
     );
 }
+
+#[test]
+fn test_concurrent_requests() {
+    let server = create_server();
+    let handle = setup_server_thread(server.clone());
+
+    let mut client1 = client::Client::new("localhost", 8080, 1000);
+    let mut client2 = client::Client::new("localhost", 8080, 1000);
+    assert!(client1.connect().is_ok(), "Client 1 failed to connect");
+    assert!(client2.connect().is_ok(), "Client 2 failed to connect");
+
+    // Client 1 sends an echo request
+    let echo_message = client_message::Message::EchoMessage(EchoMessage {
+        content: "Concurrent echo".to_string(),
+    });
+    assert!(client1.send(echo_message).is_ok(), "Client 1 failed to send echo");
+
+    // Client 2 sends an add request
+    let add_message = client_message::Message::AddRequest(AddRequest { a: 5, b: 10 });
+    assert!(client2.send(add_message).is_ok(), "Client 2 failed to send add request");
+
+    // Client 1 receives echo response
+    let response1 = client1.receive();
+    assert!(response1.is_ok(), "Client 1 failed to receive echo response");
+
+    // Client 2 receives add response
+    let response2 = client2.receive();
+    assert!(response2.is_ok(), "Client 2 failed to receive add response");
+
+    client1.disconnect().unwrap();
+    client2.disconnect().unwrap();
+    server.stop().unwrap();
+    handle.join().unwrap();
+}
+#[test]
+fn test_high_connection_volume() {
+    let server = create_server();
+    let handle = setup_server_thread(server.clone());
+
+    let client_count = 100;
+    let mut clients: Vec<client::Client> = (0..client_count)
+        .map(|_| client::Client::new("localhost", 8080, 1000))
+        .collect();
+
+    for client in clients.iter_mut() {
+        assert!(client.connect().is_ok(), "Failed to connect client");
+    }
+
+    // Send an echo message from each client
+    for client in clients.iter_mut() {
+        let message = client_message::Message::EchoMessage(EchoMessage {
+            content: "High volume test".to_string(),
+        });
+        assert!(client.send(message).is_ok(), "Client failed to send message");
+
+        let response = client.receive();
+        assert!(
+            response.is_ok(),
+            "Client failed to receive response during high connection volume"
+        );
+    }
+
+    for client in clients.iter_mut() {
+        assert!(client.disconnect().is_ok(), "Failed to disconnect client");
+    }
+
+    server.stop().unwrap();
+    handle.join().unwrap();
+}
