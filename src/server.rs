@@ -1,4 +1,3 @@
-use crate::message::{AddResponse, ClientMessage, EchoMessage, ServerMessage};
 use log::{debug, error, info, warn};
 use prost::Message;
 use std::io::{self, Read, Write};
@@ -9,182 +8,201 @@ use std::sync::{
 };
 use std::thread;
 use std::time::Duration;
+use crate::message::{AddResponse, ClientMessage, EchoMessage, ServerMessage};
 
-// Represents a connected client
+/// Represents a connected client.
 struct Client {
-    stream: TcpStream, // TCP stream for communication with the client
+    stream: TcpStream,
 }
 
 impl Client {
-    /// Creates a new client handler
     pub fn new(stream: TcpStream) -> Self {
         debug!("Initializing new client with stream: {:?}", stream);
         Client { stream }
     }
 
-    /// Handles incoming client messages
-    pub fn handle(&mut self) -> io::Result<()> {
-        const HEADER_SIZE: usize = 4; // Header size in bytes
-        const MAX_MESSAGE_SIZE: usize = 512; // Maximum allowed message size
+    pub fn handle(&mut self, is_running: &Arc<AtomicBool>) -> io::Result<()> {
+        const HEADER_SIZE: usize = 4;
+        const MAX_MESSAGE_SIZE: usize = 512;
 
         debug!("Starting to handle client messages.");
+        self.stream.set_nonblocking(true)?;
 
-        let mut header_buffer = [0u8; HEADER_SIZE];
-        self.stream.read_exact(&mut header_buffer)?;
+        while is_running.load(Ordering::SeqCst) {
+            let mut header_buffer = [0u8; HEADER_SIZE];
+            match self.stream.read_exact(&mut header_buffer) {
+                Ok(_) => {
+                    let payload_size = u32::from_be_bytes(header_buffer) as usize;
+                    info!("Received header indicating payload size: {} bytes", payload_size);
 
-        let payload_size = u32::from_be_bytes(header_buffer) as usize;
-        info!(
-            "Received header indicating payload size: {} bytes",
-            payload_size
-        );
+                    if payload_size > MAX_MESSAGE_SIZE {
+                        warn!(
+                            "Payload size exceeds maximum allowed limit of {} bytes: {} bytes",
+                            MAX_MESSAGE_SIZE, payload_size
+                        );
+                        self.respond_with_error(2, "Payload too large")?;
+                        self.drain_payload(payload_size)?;
+                        continue;
+                    }
 
-        if payload_size > MAX_MESSAGE_SIZE {
-            error!(
-                "Payload size exceeds maximum allowed size: {}",
-                payload_size
-            );
-
-            let response = ServerMessage {
-                message: None,
-                status: 2,
-            };
-            let mut payload = Vec::new();
-            response.encode(&mut payload).unwrap();
-            self.stream.write_all(&payload)?;
-
-            let mut oversized_buffer = vec![0u8; payload_size];
-            let _ = self.stream.read_exact(&mut oversized_buffer);
-            debug!(
-                "Oversized payload (truncated to 512 bytes): {:?}",
-                &oversized_buffer[..MAX_MESSAGE_SIZE]
-            );
-
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Payload size exceeds maximum allowed size",
-            ));
-        }
-
-        let mut buffer = vec![0; payload_size];
-        self.stream.read_exact(&mut buffer)?;
-        debug!("Read {} bytes of payload from the stream.", payload_size);
-
-        if let Ok(client_message) = ClientMessage::decode(&buffer[..]) {
-            debug!("Successfully decoded client message.");
-            match client_message.message {
-                Some(crate::message::client_message::Message::EchoMessage(echo)) => {
-                    debug!("Processing EchoMessage: {:?}", echo);
-                    if echo.content.trim().is_empty() {
-                        warn!("Received empty EchoMessage content.");
-                        let response = ServerMessage {
-                            message: Some(crate::message::server_message::Message::EchoMessage(
-                                EchoMessage {
-                                    content: "Received empty EchoMessage content.".to_string(),
-                                },
-                            )),
-                            status: 2,
-                        };
-                        let mut payload = Vec::new();
-                        response.encode(&mut payload).unwrap();
-                        self.stream.write_all(&payload)?;
-                        debug!("Sent response for empty EchoMessage.");
-                    } else {
-                        info!("Received EchoMessage: {}", echo.content);
-                        let response = ServerMessage {
-                            message: Some(crate::message::server_message::Message::EchoMessage(
-                                EchoMessage {
-                                    content: echo.content,
-                                },
-                            )),
-                            status: 1,
-                        };
-                        let mut payload = Vec::new();
-                        response.encode(&mut payload).unwrap();
-                        self.stream.write_all(&payload)?;
-                        debug!("Sent response for valid EchoMessage.");
+                    let mut buffer = vec![0; payload_size];
+                    match self.stream.read_exact(&mut buffer) {
+                        Ok(_) => {
+                            debug!("Successfully read payload of {} bytes.", payload_size);
+                            match ClientMessage::decode(&buffer[..]) {
+                                Ok(client_message) => {
+                                    info!("Decoded client message successfully.");
+                                    self.process_message(client_message)?;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Failed to decode client message. Error: {}. Payload: {:?}",
+                                        e, buffer
+                                    );
+                                    self.respond_with_error(3, "Invalid message format")?;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Error reading payload of {} bytes from client: {}",
+                                payload_size, e
+                            );
+                            return Err(e);
+                        }
                     }
                 }
-                Some(crate::message::client_message::Message::AddRequest(add_request)) => {
-                    debug!("Processing AddRequest: {:?}", add_request);
-                    // if add_request.a < 0 || add_request.b < 0 {
-                    //     warn!(
-                    //         "Received AddRequest with negative numbers: {} + {}",
-                    //         add_request.a, add_request.b
-                    //     );
-                    //     return Ok(());
-                    // }
-
-                    info!("Received AddRequest: {} + {}", add_request.a, add_request.b);
-                    let result = add_request.a + add_request.b;
-                    let response = ServerMessage {
-                        message: Some(crate::message::server_message::Message::AddResponse(
-                            AddResponse { result },
-                        )),
-                        status: 1,
-                    };
-                    let mut payload = Vec::new();
-                    response.encode(&mut payload).unwrap();
-                    self.stream.write_all(&payload)?;
-                    debug!("Sent response for AddRequest with result: {}", result);
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(100));
                 }
-                _ => {
-                    error!("Received unsupported or unknown message type.");
+                Err(e) => {
+                    error!("Error reading header from client: {}", e);
+                    return Err(e);
                 }
             }
-        } else {
-            error!("Failed to decode incoming ClientMessage.");
         }
 
         Ok(())
     }
+
+    fn respond_with_error(&mut self, status: i32, error_message: &str) -> io::Result<()> {
+        let response = ServerMessage {
+            message: Some(crate::message::server_message::Message::EchoMessage(EchoMessage {
+                content: error_message.to_string(),
+            })),
+            status,
+        };
+        let mut payload = Vec::new();
+        response.encode(&mut payload).map_err(|e| {
+            error!(
+                "Failed to encode error response (status: {}, message: '{}'). Error: {}",
+                status, error_message, e
+            );
+            e
+        })?;
+        self.stream.write_all(&payload).map_err(|e| {
+            error!(
+                "Failed to send error response (status: {}, message: '{}'). Error: {}",
+                status, error_message, e
+            );
+            e
+        })?;
+        debug!("Sent error response: {}", error_message);
+        Ok(())
+    }
+
+    fn drain_payload(&mut self, size: usize) -> io::Result<()> {
+        let mut buffer = vec![0; size];
+        match self.stream.read_exact(&mut buffer) {
+            Ok(_) => {
+                debug!("Drained oversized payload of {} bytes.", size);
+            }
+            Err(e) => {
+                error!(
+                    "Error while draining oversized payload of {} bytes. Error: {}",
+                    size, e
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn process_message(&mut self, client_message: ClientMessage) -> io::Result<()> {
+        match client_message.message {
+            Some(crate::message::client_message::Message::EchoMessage(echo)) => {
+                info!("Received EchoMessage: {}", echo.content);
+                let response = ServerMessage {
+                    message: Some(crate::message::server_message::Message::EchoMessage(
+                        EchoMessage {
+                            content: echo.content,
+                        },
+                    )),
+                    status: 1,
+                };
+                let mut payload = Vec::new();
+                response.encode(&mut payload)?;
+                self.stream.write_all(&payload)?;
+                debug!("Sent EchoMessage response.");
+            }
+            Some(crate::message::client_message::Message::AddRequest(add_request)) => {
+                info!("Received AddRequest: {} + {}", add_request.a, add_request.b);
+                let result = add_request.a + add_request.b;
+                let response = ServerMessage {
+                    message: Some(crate::message::server_message::Message::AddResponse(
+                        AddResponse { result },
+                    )),
+                    status: 1,
+                };
+                let mut payload = Vec::new();
+                response.encode(&mut payload)?;
+                self.stream.write_all(&payload)?;
+                debug!("Sent AddResponse with result: {}", result);
+            }
+            _ => {
+                warn!("Received unsupported message type.");
+                self.respond_with_error(3, "Unsupported message type")?;
+            }
+        }
+        Ok(())
+    }
 }
 
-// Server struct that listens for and handles clients
+/// Multithreaded server struct.
 pub struct Server {
     listener: TcpListener,
     is_running: Arc<AtomicBool>,
 }
 
 impl Server {
-    /// Creates a new server
     pub fn new(addr: &str) -> io::Result<Self> {
-        debug!("Attempting to bind server to address: {}", addr);
         let listener = TcpListener::bind(addr)?;
-        let is_running = Arc::new(AtomicBool::new(false));
+        listener.set_nonblocking(true)?;
         info!("Server bound to address: {}", addr);
         Ok(Server {
             listener,
-            is_running,
+            is_running: Arc::new(AtomicBool::new(false)),
         })
     }
 
-    /// Runs the server to accept and handle client connections
     pub fn run(&self) -> io::Result<()> {
         self.is_running.store(true, Ordering::SeqCst);
-        info!("Server is running on {}", self.listener.local_addr()?);
-
-        self.listener.set_nonblocking(true)?;
-        debug!("Set listener to non-blocking mode.");
+        info!("Server started on {}", self.listener.local_addr()?);
 
         while self.is_running.load(Ordering::SeqCst) {
             match self.listener.accept() {
                 Ok((stream, addr)) => {
                     info!("New client connected: {}", addr);
+                    let is_running = Arc::clone(&self.is_running);
                     thread::spawn(move || {
                         let mut client = Client::new(stream);
-                        loop {
-                            debug!("Handling messages for client: {}", addr);
-                            if let Err(e) = client.handle() {
-                                error!("Error handling client {}: {}", addr, e);
-                                break;
-                            }
+                        if let Err(e) = client.handle(&is_running) {
+                            error!("Error handling client {}: {}", addr, e);
                         }
                         info!("Client {} disconnected.", addr);
                     });
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(100));
-                    debug!("No incoming connections, sleeping briefly.");
                 }
                 Err(e) => {
                     error!("Error accepting connection: {}", e);
@@ -192,19 +210,12 @@ impl Server {
             }
         }
 
-        info!("Server stopped.");
+        info!("Server shutting down.");
         Ok(())
     }
 
-    /// Stops the server
-    pub fn stop(&self) -> Result<(), String> {
-        if self.is_running.load(Ordering::SeqCst) {
-            self.is_running.store(false, Ordering::SeqCst);
-            info!("Shutdown signal sent.");
-            Ok(())
-        } else {
-            warn!("Server was already stopped or not running.");
-            Err("Server was already stopped or not running.".to_string())
-        }
+    pub fn stop(&self) {
+        self.is_running.store(false, Ordering::SeqCst);
+        info!("Shutdown signal sent.");
     }
 }

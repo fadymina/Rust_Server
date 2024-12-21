@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
     thread::{self, JoinHandle},
 };
-
+use std::io::Write;
 mod client;
 
 fn setup_server_thread(server: Arc<Server>) -> JoinHandle<()> {
@@ -220,7 +220,7 @@ fn test_multiple_clients() {
     let handle = setup_server_thread(server.clone());
 
     // Create and connect multiple clients
-    let mut clients = vec![
+    let mut clients = [
         client::Client::new("localhost", 8080, 1000),
         client::Client::new("localhost", 8080, 1000),
         client::Client::new("localhost", 8080, 1000),
@@ -299,7 +299,7 @@ fn test_client_add_request() {
     let mut add_request = AddRequest::default();
     add_request.a = 10;
     add_request.b = 20;
-    let message = client_message::Message::AddRequest(add_request.clone());
+    let message = client_message::Message::AddRequest(add_request);
 
     // Send the message to the server
     assert!(client.send(message).is_ok(), "Failed to send message");
@@ -334,4 +334,28 @@ fn test_client_add_request() {
         handle.join().is_ok(),
         "Server thread panicked or failed to join"
     );
+}
+#[test]
+fn test_partial_payload_with_data() {
+    let server = create_server();
+    let handle = setup_server_thread(server.clone());
+
+    let mut client = client::Client::new("localhost", 8080, 1000);
+    assert!(client.connect().is_ok(), "Failed to connect to the server");
+
+    // Send header indicating a payload of 512 bytes
+    let header = (512u32).to_be_bytes();
+    client.stream_mut().unwrap().write_all(&header).unwrap();
+
+    // Send part of the payload (e.g., 256 bytes out of 512)
+    let partial_payload = vec![b'A'; 256];
+    client.stream_mut().unwrap().write_all(&partial_payload).unwrap();
+
+    // Disconnect before completing the payload
+    assert!(client.disconnect().is_ok(), "Failed to disconnect from the server");
+
+    // Verify the server logs or handles the issue gracefully
+    // Stop the server
+    let _ = server.stop();
+    assert!(handle.join().is_ok(), "Server thread panicked");
 }
