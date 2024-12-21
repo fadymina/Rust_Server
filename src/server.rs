@@ -1,4 +1,3 @@
-use crate::message::{AddResponse, ClientMessage, EchoMessage, ServerMessage};
 use log::{debug, error, info, warn};
 use prost::Message;
 use std::io::{self, Read, Write};
@@ -46,6 +45,7 @@ impl Client {
         const MAX_MESSAGE_SIZE: usize = 512; // Maximum allowed message size in bytes
 
         debug!("Starting to handle client messages.");
+        self.stream.set_nonblocking(true)?;
 
         // Buffer to read the message header (indicates payload size)
         let mut header_buffer = [0u8; HEADER_SIZE];
@@ -176,6 +176,87 @@ impl Client {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Decoding failed"));
         }
 
+        Ok(())
+    }
+
+    fn respond_with_error(&mut self, status: i32, error_message: &str) -> io::Result<()> {
+        let response = ServerMessage {
+            message: Some(crate::message::server_message::Message::EchoMessage(EchoMessage {
+                content: error_message.to_string(),
+            })),
+            status,
+        };
+        let mut payload = Vec::new();
+        response.encode(&mut payload).map_err(|e| {
+            error!(
+                "Failed to encode error response (status: {}, message: '{}'). Error: {}",
+                status, error_message, e
+            );
+            e
+        })?;
+        self.stream.write_all(&payload).map_err(|e| {
+            error!(
+                "Failed to send error response (status: {}, message: '{}'). Error: {}",
+                status, error_message, e
+            );
+            e
+        })?;
+        debug!("Sent error response: {}", error_message);
+        Ok(())
+    }
+
+    fn drain_payload(&mut self, size: usize) -> io::Result<()> {
+        let mut buffer = vec![0; size];
+        match self.stream.read_exact(&mut buffer) {
+            Ok(_) => {
+                debug!("Drained oversized payload of {} bytes.", size);
+            }
+            Err(e) => {
+                error!(
+                    "Error while draining oversized payload of {} bytes. Error: {}",
+                    size, e
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn process_message(&mut self, client_message: ClientMessage) -> io::Result<()> {
+        match client_message.message {
+            Some(crate::message::client_message::Message::EchoMessage(echo)) => {
+                info!("Received EchoMessage: {}", echo.content);
+                let response = ServerMessage {
+                    message: Some(crate::message::server_message::Message::EchoMessage(
+                        EchoMessage {
+                            content: echo.content,
+                        },
+                    )),
+                    status: 1,
+                };
+                let mut payload = Vec::new();
+                response.encode(&mut payload)?;
+                self.stream.write_all(&payload)?;
+                debug!("Sent EchoMessage response.");
+            }
+            Some(crate::message::client_message::Message::AddRequest(add_request)) => {
+                info!("Received AddRequest: {} + {}", add_request.a, add_request.b);
+                let result = add_request.a + add_request.b;
+                let response = ServerMessage {
+                    message: Some(crate::message::server_message::Message::AddResponse(
+                        AddResponse { result },
+                    )),
+                    status: 1,
+                };
+                let mut payload = Vec::new();
+                response.encode(&mut payload)?;
+                self.stream.write_all(&payload)?;
+                debug!("Sent AddResponse with result: {}", result);
+            }
+            _ => {
+                warn!("Received unsupported message type.");
+                self.respond_with_error(3, "Unsupported message type")?;
+            }
+        }
         Ok(())
     }
 }
