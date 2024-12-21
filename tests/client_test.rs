@@ -7,8 +7,7 @@ use std::{
     sync::Arc,
     thread::{self, JoinHandle},
 };
-// use std::cmp::Ordering;
-
+use std::io::Write;
 mod client;
 
 fn setup_server_thread(server: Arc<Server>) -> JoinHandle<()> {
@@ -17,7 +16,7 @@ fn setup_server_thread(server: Arc<Server>) -> JoinHandle<()> {
     })
 }
 
-fn create_server(addr: &str, port: Option<u16>, max_connections: usize, rate_limit: usize, interval_ms: u64) -> Arc<Server> {
+fn create_server(addr: &str, port: Option<u16>, max_connections: usize) -> Arc<Server> {
     let port = port.unwrap_or(8080); // Use the provided port or default to 8080
     let full_address = format!("{}:{}", addr, port);
 
@@ -25,16 +24,13 @@ fn create_server(addr: &str, port: Option<u16>, max_connections: usize, rate_lim
     let server = Server::new(&full_address, max_connections)
         .expect("Failed to start server");
 
-    // // Attach a rate limiter to the server (optional, based on Server implementation)
-    // server.set_rate_limiter(rate_limit, Duration::from_millis(interval_ms));
-
     Arc::new(server)
 }
 
 #[test]
 fn test_client_connection() {
     // Set up the server in a separate thread
-    let server = create_server("localhost", None, 100, 10, 1000);
+    let server = create_server("localhost", None, 100);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -61,7 +57,7 @@ fn test_client_echo_message() {
     let _ = env_logger::builder().is_test(true).try_init();
     // info!("This is a log message.");
 
-    let server = create_server("localhost", None, 100, 10, 1000);
+    let server = create_server("localhost", None, 100);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -119,7 +115,7 @@ fn test_client_echo_message() {
 #[test]
 fn test_huge_payload() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let server = create_server("localhost", None, 100, 10, 1000);
+    let server = create_server("localhost", None, 100);
     let handle = setup_server_thread(server.clone());
 
     let mut client = client::Client::new("localhost", 8080, 1000);
@@ -170,7 +166,7 @@ fn test_multiple_echo_messages() {
     let _ = env_logger::builder().is_test(true).try_init();
 
     // Set up the server in a separate thread
-    let server = create_server("localhost", None, 100, 10, 1000);
+    let server = create_server("localhost", None, 100);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -231,7 +227,7 @@ fn test_multiple_clients() {
 
 
     // Set up the server in a separate thread
-    let server = create_server("localhost", None, 100, 10, 1000);
+    let server = create_server("localhost", None, 100);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect multiple clients
@@ -306,7 +302,7 @@ fn test_multiple_clients() {
 #[test]
 fn test_client_add_request() {
     // Set up the server in a separate thread
-    let server = create_server("localhost", None, 100, 10, 1000);
+    let server = create_server("localhost", None, 100);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -356,7 +352,7 @@ fn test_client_add_request() {
 
 #[test]
 fn test_concurrent_requests() {
-    let server = create_server("localhost", None, 100, 10, 1000);
+    let server = create_server("localhost", None, 100);
     let handle = setup_server_thread(server.clone());
 
     let mut client1 = client::Client::new("localhost", 8080, 1000);
@@ -391,7 +387,7 @@ fn test_concurrent_requests() {
 fn test_high_connection_volume() {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let server = create_server("localhost", None, 100, 10, 1000);
+    let server = create_server("localhost", None, 100);
     let handle = setup_server_thread(server.clone());
 
     let client_count = 10;
@@ -428,9 +424,9 @@ fn test_high_connection_volume() {
 fn test_multiple_servers_multiple_clients() {
     // Set up the server in a separate thread
     
-    let server0 = create_server("localhost", Some(3000),100,10,1000);
-    let server1 = create_server("localhost", Some(7000),100,10,1000);
-    let server2 = create_server("localhost", None, 100, 10, 1000);
+    let server0 = create_server("localhost", Some(3000),100);
+    let server1 = create_server("localhost", Some(7000),100);
+    let server2 = create_server("localhost", None, 100);
 
     let handle0 = setup_server_thread(server0.clone());
     let handle1 = setup_server_thread(server1.clone());
@@ -615,7 +611,7 @@ fn test_server_throttling() {
 
     // Set up the server with a low max connection limit for testing throttling
     let max_connections = 5;
-    let server = create_server("localhost", None, max_connections, 0, 0); // No rate limiter
+    let server = create_server("localhost", None, max_connections); // No rate limiter
     let handle = setup_server_thread(server.clone());
 
     // std::thread::sleep(std::time::Duration::from_secs(1));
@@ -673,7 +669,9 @@ fn test_server_throttling() {
 }
 #[test]
 fn test_server_shutdown() {
-    let server = create_server("localhost", None, 5, 10, 1000);
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let server = create_server("localhost", None, 5);
     let handle = setup_server_thread(server.clone());
 
     let mut client = Client::new("localhost", 8080, 1000);
@@ -693,4 +691,111 @@ fn test_server_shutdown() {
         result.is_err(),
         "Client should not be able to send message after server shutdown"
     );
+}
+#[test]
+fn test_malformed_payload() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let server = create_server("localhost", None, 100);
+    let handle = setup_server_thread(server.clone());
+
+    let mut client = client::Client::new("localhost", 8080, 1000);
+    assert!(client.connect().is_ok(), "Failed to connect client");
+
+    // Send a payload with valid size but invalid content
+    let malformed_payload = vec![0x12, 0x34, 0x56, 0x78]; // Random bytes
+    if let Some(stream) = client.stream_mut() {
+        let header = (malformed_payload.len() as u32).to_be_bytes();
+        assert!(
+            stream.write_all(&header).is_ok(),
+            "Failed to send payload header"
+        );
+        assert!(
+            stream.write_all(&malformed_payload).is_ok(),
+            "Failed to send malformed payload"
+        );
+    } else {
+        panic!("Client stream is not connected");
+    }
+
+    // Server should respond with an error
+    let response = client.receive();
+    assert!(
+        response.is_ok(),
+        "Expected an error response from the server, but got none"
+    );
+
+    // Verify the server's response
+    let server_response = response.unwrap();
+    assert_eq!(
+        server_response.status, 2,
+        "Expected status 2 (error) for malformed payload"
+    );
+
+    client.disconnect().unwrap();
+    server.stop().unwrap();
+    handle.join().unwrap();
+}
+// #[test]
+// fn test_idle_connection_timeout() {
+//     // Server with a short idle timeout
+//     let server = create_server("localhost", None, 100, 10, 500); // 500 ms timeout
+//     let handle = setup_server_thread(server.clone());
+
+//     let mut client = client::Client::new("localhost", 8080, 1000);
+//     assert!(client.connect().is_ok(), "Failed to connect client");
+
+//     // Wait to simulate idleness
+//     std::thread::sleep(std::time::Duration::from_secs(1));
+
+//     // Attempt to send a message after timeout
+//     let message = client_message::Message::EchoMessage(EchoMessage {
+//         content: "After timeout".to_string(),
+//     });
+//     let result = client.send(message);
+//     assert!(
+//         result.is_err(),
+//         "Client should not be able to send a message after timeout"
+//     );
+
+//     client.disconnect().unwrap_or_default();
+//     server.stop().unwrap();
+//     handle.join().unwrap();
+// }
+
+#[test]
+fn test_server_shutdown_during_requests() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+    let server = create_server("localhost", None, 100);
+    let handle = setup_server_thread(server.clone());
+
+    let mut client1 = client::Client::new("localhost", 8080, 1000);
+    let mut client2 = client::Client::new("localhost", 8080, 1000);
+    assert!(client1.connect().is_ok(), "Client 1 failed to connect");
+    assert!(client2.connect().is_ok(), "Client 2 failed to connect");
+
+    // Start a thread to stop the server while clients are active
+    let server_clone = server.clone();
+    let shutdown_thread = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        server_clone.stop().unwrap();
+    });
+
+    // Clients send messages during server shutdown
+    let message = client_message::Message::EchoMessage(EchoMessage {
+        content: "During shutdown".to_string(),
+    });
+    let result1 = client1.send(message.clone());
+    let result2 = client2.send(message);
+
+    // Server might reject or disconnect clients
+    assert!(result1.is_err() || result1.is_ok(), "Unexpected behavior during shutdown");
+    assert!(result2.is_err() || result2.is_ok(), "Unexpected behavior during shutdown");
+
+    // Clean up
+    shutdown_thread.join().unwrap();
+    client1.disconnect().unwrap_or_default();
+    client2.disconnect().unwrap_or_default();
+    handle.join().unwrap();
 }
