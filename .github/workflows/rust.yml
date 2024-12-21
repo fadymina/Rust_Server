@@ -40,5 +40,5 @@ jobs:
 
       # Run tests
       - name: Run tests
-        run: cargo test --verbose
+        run: RUST_LOG=info cargo test  -- --test-threads=1 --nocapture
 
