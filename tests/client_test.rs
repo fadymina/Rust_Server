@@ -15,14 +15,16 @@ fn setup_server_thread(server: Arc<Server>) -> JoinHandle<()> {
     })
 }
 
-fn create_server() -> Arc<Server> {
-    Arc::new(Server::new("localhost:8080").expect("Failed to start server"))
+fn create_server(addr: &str, port: Option<u16>) -> Arc<Server> {
+    let port = port.unwrap_or(8080); // Use the provided port or default to 8080
+    let full_address = format!("{}:{}", addr, port);
+    Arc::new(Server::new(&full_address).expect("Failed to start server"))
 }
 
 #[test]
 fn test_client_connection() {
     // Set up the server in a separate thread
-    let server = create_server();
+    let server = create_server("localhost", None);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -49,7 +51,7 @@ fn test_client_echo_message() {
     let _ = env_logger::builder().is_test(true).try_init();
     // info!("This is a log message.");
 
-    let server = create_server();
+    let server = create_server("localhost", None);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -108,7 +110,7 @@ fn test_client_echo_message() {
 fn test_huge_payload() {
     // Set up the server in a separate thread
     let _ = env_logger::builder().is_test(true).try_init();
-    let server = create_server();
+    let server = create_server("localhost", None);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -158,7 +160,7 @@ fn test_huge_payload() {
 #[test]
 fn test_multiple_echo_messages() {
     // Set up the server in a separate thread
-    let server = create_server();
+    let server = create_server("localhost", None);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -216,7 +218,7 @@ fn test_multiple_echo_messages() {
 #[test]
 fn test_multiple_clients() {
     // Set up the server in a separate thread
-    let server = create_server();
+    let server = create_server("localhost", None);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect multiple clients
@@ -291,7 +293,7 @@ fn test_multiple_clients() {
 #[test]
 fn test_client_add_request() {
     // Set up the server in a separate thread
-    let server = create_server();
+    let server = create_server("localhost", None);
     let handle = setup_server_thread(server.clone());
 
     // Create and connect the client
@@ -341,7 +343,7 @@ fn test_client_add_request() {
 
 #[test]
 fn test_concurrent_requests() {
-    let server = create_server();
+    let server = create_server("localhost", None);
     let handle = setup_server_thread(server.clone());
 
     let mut client1 = client::Client::new("localhost", 8080, 1000);
@@ -374,7 +376,7 @@ fn test_concurrent_requests() {
 }
 #[test]
 fn test_high_connection_volume() {
-    let server = create_server();
+    let server = create_server("localhost", None);
     let handle = setup_server_thread(server.clone());
 
     let client_count = 100;
@@ -406,4 +408,180 @@ fn test_high_connection_volume() {
 
     server.stop().unwrap();
     handle.join().unwrap();
+}
+#[test]
+fn test_multiple_servers() {
+    // Set up the server in a separate thread
+    
+    let server0 = create_server("localhost", Some(3000));
+    let server1 = create_server("localhost", Some(7000));
+    let server2 = create_server("localhost", None);
+
+    let handle = setup_server_thread(server0.clone());
+    let handle = setup_server_thread(server1.clone());
+    let handle = setup_server_thread(server2.clone());
+
+    // Create and connect multiple clients
+    let mut clients0 = vec![
+        client::Client::new("localhost", 3000, 1000),
+        client::Client::new("localhost", 3000, 1000),
+        client::Client::new("localhost", 3000, 1000),
+    ];
+    let mut clients1 = vec![
+        client::Client::new("localhost", 7000, 1000),
+        client::Client::new("localhost", 7000, 1000),
+        client::Client::new("localhost", 7000, 1000),
+    ];
+    let mut clients2 = vec![
+        client::Client::new("localhost", 8080, 1000),
+        client::Client::new("localhost", 8080, 1000),
+        client::Client::new("localhost", 8080, 1000),
+    ];
+
+    for client in clients0.iter_mut() {
+        assert!(client.connect().is_ok(), "Failed to connect to the server");
+    }
+    for client in clients1.iter_mut() {
+        assert!(client.connect().is_ok(), "Failed to connect to the server");
+    }
+    for client in clients2.iter_mut() {
+        assert!(client.connect().is_ok(), "Failed to connect to the server");
+    }
+
+    // Prepare multiple messages
+    let messages = vec![
+        "Hello, World!".to_string(),
+        "How are you?".to_string(),
+        "Goodbye!".to_string(),
+    ];
+
+    // Send and receive multiple messages for each client
+    for message_content in messages.clone() {
+        let mut echo_message = EchoMessage::default();
+        echo_message.content = message_content.clone();
+        let message = client_message::Message::EchoMessage(echo_message.clone());
+
+        for client in clients0.iter_mut() {
+            // Send the message to the server
+            assert!(
+                client.send(message.clone()).is_ok(),
+                "Failed to send message"
+            );
+
+            // Receive the echoed message
+            let response = client.receive();
+            assert!(
+                response.is_ok(),
+                "Failed to receive response for EchoMessage"
+            );
+
+            match response.unwrap().message {
+                Some(server_message::Message::EchoMessage(echo)) => {
+                    assert_eq!(
+                        echo.content, message_content,
+                        "Echoed message content does not match"
+                    );
+                }
+                _ => panic!("Expected EchoMessage, but received a different message"),
+            }
+            println!("Echoed Message recieved successfully ");
+        }
+    }
+
+    for message_content in messages.clone() {
+        let mut echo_message = EchoMessage::default();
+        echo_message.content = message_content.clone();
+        let message = client_message::Message::EchoMessage(echo_message.clone());
+
+        for client in clients1.iter_mut() {
+            // Send the message to the server
+            assert!(
+                client.send(message.clone()).is_ok(),
+                "Failed to send message"
+            );
+
+            // Receive the echoed message
+            let response = client.receive();
+            assert!(
+                response.is_ok(),
+                "Failed to receive response for EchoMessage"
+            );
+
+            match response.unwrap().message {
+                Some(server_message::Message::EchoMessage(echo)) => {
+                    assert_eq!(
+                        echo.content, message_content,
+                        "Echoed message content does not match"
+                    );
+                }
+                _ => panic!("Expected EchoMessage, but received a different message"),
+            }
+            println!("Echoed Message recieved successfully ");
+        }
+    }
+
+    for message_content in messages {
+        let mut echo_message = EchoMessage::default();
+        echo_message.content = message_content.clone();
+        let message = client_message::Message::EchoMessage(echo_message.clone());
+
+        for client in clients2.iter_mut() {
+            // Send the message to the server
+            assert!(
+                client.send(message.clone()).is_ok(),
+                "Failed to send message"
+            );
+
+            // Receive the echoed message
+            let response = client.receive();
+            assert!(
+                response.is_ok(),
+                "Failed to receive response for EchoMessage"
+            );
+
+            match response.unwrap().message {
+                Some(server_message::Message::EchoMessage(echo)) => {
+                    assert_eq!(
+                        echo.content, message_content,
+                        "Echoed message content does not match"
+                    );
+                }
+                _ => panic!("Expected EchoMessage, but received a different message"),
+            }
+            println!("Echoed Message recieved successfully ");
+        }
+    }
+
+    // Disconnect the clients
+    for client in clients0.iter_mut() {
+        assert!(
+            client.disconnect().is_ok(),
+            "Failed to disconnect from the server"
+        );
+    }
+        // Disconnect the clients
+    for client in clients1.iter_mut() {
+        assert!(
+            client.disconnect().is_ok(),
+            "Failed to disconnect from the server"
+        );
+    }
+        // Disconnect the clients
+    for client in clients2.iter_mut() {
+        assert!(
+            client.disconnect().is_ok(),
+            "Failed to disconnect from the server"
+        );
+    }
+
+    println!("disconnected all clients ");
+
+    // Stop the server and wait for thread to finish
+    let _ = server0.stop();
+    let _ = server1.stop();
+    let _ = server2.stop();
+    assert!(
+        handle.join().is_ok(),
+        "Server thread panicked or failed to join"
+    );
 }
